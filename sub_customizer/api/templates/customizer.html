@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>订阅自定义</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f9;
+            color: #333;
+            padding: 20px;
+            margin: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            font-size: 24px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            font-size: 14px;
+            color: #555;
+            margin-bottom: 5px;
+        }
+        input[type="url"],
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            font-size: 14px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        input[type="checkbox"] {
+            margin-right: 10px;
+        }
+        .button-container {
+            text-align: center;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .output {
+            margin-top: 20px;
+            background-color: #f0f8ff;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: monospace;
+            word-wrap: break-word;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+        }
+        .error {
+            color: red;
+            font-size: 14px;
+        }
+        #copy-btn, #clash-btn {
+            margin-top: 10px;
+            padding: 8px 16px;
+            background-color: #007BFF;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        #copy-btn:hover, #clash-btn:hover {
+            background-color: #0056b3;
+        }
+        #clash-btn {
+            background-color: #17a2b8;
+        }
+        #clash-btn:hover {
+            background-color: #138496;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>订阅自定义</h1>
+
+    <div class="form-group">
+        <label for="base_url">后端地址(默认为当前页面的origin)</label>
+        <!-- Jinja2 template to set default value for base_url -->
+        <input type="text" id="base_url" placeholder="请输入后端地址" value="{{ base_url }}">
+    </div>
+
+    <div class="form-group">
+        <label for="url">订阅地址</label>
+        <input type="url" id="url" placeholder="请输入订阅URL" required>
+    </div>
+
+    <div class="form-group">
+        <label for="remote_config">远程配置</label>
+        <!-- Jinja2 template to set default value for remote_config -->
+        <input type="url" id="remote_config" placeholder="请输入远程配置URL" value="{{ remote_config or '' }}">
+    </div>
+
+    <div class="form-group">
+        <label for="no_proxy">
+            <input type="checkbox" id="no_proxy"> 后端请求URL时不使用代理
+        </label>
+    </div>
+
+    <div class="button-container">
+        <button onclick="generateUrl()">生成订阅链接</button>
+    </div>
+
+    <div id="output" class="output" style="display: none;">
+        <strong>生成的URL：</strong>
+        <p id="generated_url"></p>
+        <button id="copy-btn" style="display: none;" onclick="copyUrl()">拷贝URL</button>
+        <button id="clash-btn" style="display: none;" onclick="importToClash()">导入到Clash</button>
+    </div>
+
+    <div id="error" class="error" style="display: none;">
+        <p>请输入订阅地址（URL）并确保格式正确。</p>
+    </div>
+</div>
+
+<script>
+    // Set base_url to current page's origin by default
+    document.getElementById('base_url').value = "{{ base_url or window.location.origin }}";
+
+    function generateUrl() {
+        // Get input values
+        const baseUrl = document.getElementById('base_url').value || window.location.origin;
+        const url = document.getElementById('url').value;
+        const remoteConfig = document.getElementById('remote_config').value;
+        const noProxy = document.getElementById('no_proxy').checked;
+
+        // Validation: Only url is required, remote_config is optional
+        if (!url) {
+            document.getElementById('error').style.display = 'block';
+            document.getElementById('output').style.display = 'none';
+            return;
+        } else {
+            document.getElementById('error').style.display = 'none';
+        }
+
+        // Construct URL query string
+        const params = new URLSearchParams();
+        params.append('url', url);
+
+        // Add remote_config if provided
+        if (remoteConfig) {
+            params.append('remote_config', remoteConfig);
+        }
+
+        // Optional 'no_proxy' parameter
+        if (noProxy) {
+            params.append('no_proxy', 'true');
+        }
+
+        // Combine base_url and query parameters
+        const generatedUrl = `${baseUrl}?${params.toString()}`;
+
+        // Display the generated URL
+        const outputDiv = document.getElementById('output');
+        const generatedUrlElement = document.getElementById('generated_url');
+        const copyButton = document.getElementById('copy-btn');
+        const clashButton = document.getElementById('clash-btn');
+
+        generatedUrlElement.textContent = generatedUrl;
+        outputDiv.style.display = 'block';
+        copyButton.style.display = 'inline-block';
+        clashButton.style.display = 'inline-block';
+
+        // Update Clash URL button
+        clashButton.setAttribute('onclick', `importToClash('${generatedUrl}')`);
+    }
+
+    function copyUrl() {
+        const url = document.getElementById('generated_url').textContent;
+        navigator.clipboard.writeText(url)
+        .then(() => {
+            alert('URL 已复制到剪贴板！');
+        })
+        .catch((err) => {
+            console.error('复制到剪贴板失败:', err);
+            alert('复制到剪贴板失败，请手动复制 URL。');
+        });
+    }
+
+    function importToClash(generatedUrl) {
+      // Open Clash app with the generated URL
+        window.location.href = `clash://install-config?url=${encodeURIComponent(generatedUrl)}`;
+    }
+</script>
+
+</body>
+</html>

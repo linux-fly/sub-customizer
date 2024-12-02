@@ -1,19 +1,27 @@
 import configparser
-import io
 import logging
 import re
 from collections import OrderedDict
 from functools import cached_property, lru_cache
-from typing import IO, TYPE_CHECKING, List, Literal, Optional, TypedDict
+from typing import TYPE_CHECKING, List, Literal, Optional, TypedDict
 from urllib import parse
 
 import requests
 import yaml
 from pydantic import ValidationError
+from yaml import YAMLError
 
 from .datastructures import ClashConfig
 
 logger = logging.getLogger(__name__)
+
+
+class CustomizerError(Exception):
+    pass
+
+
+class LoadSubscriptionError(CustomizerError):
+    pass
 
 
 @lru_cache(None)
@@ -214,7 +222,11 @@ class RemoteConfigParser:
     @classmethod
     def from_url(cls, url: str, **init_kws):
         res = requests.get(url)
-        return cls(res.text, **init_kws)
+        try:
+            return cls(res.text, **init_kws)
+        except configparser.Error as e:
+            logger.exception(e)
+            raise CustomizerError("解析远程配置错误") from e
 
     @cached_property
     def options(self):
@@ -362,9 +374,15 @@ class ClashSubCustomizer:
             parsed = parse.urlparse(url)
             proxies = {"no_proxy": parsed.hostname}
         res = requests.get(url, headers=cls.headers, proxies=proxies)
-        return cls(res.text)
+        try:
+            return cls(res.text)
+        except YAMLError as e:
+            logger.exception(e)
+            raise LoadSubscriptionError("解析订阅文件错误") from e
 
-    def write_remote_config(self, remote_url) -> IO[bytes]:
+    def write_remote_config(self, remote_url) -> bytes:
+        if not remote_url:
+            return self.dump()
         parser = RemoteConfigParser.from_url(remote_url, clash_config=self.config)
         proxy_groups = parser.get_proxy_groups()
         if proxy_groups:
@@ -381,14 +399,13 @@ class ClashSubCustomizer:
             self.config["rules"] = []
         override_options = parser.get_override_options()
         self.config.update(override_options)
-        buffer = io.BytesIO()
-        yaml.dump(
+        return self.dump()
+
+    def dump(self) -> bytes:
+        return yaml.dump(
             self.config,
-            stream=buffer,
             default_flow_style=False,
             allow_unicode=True,
             sort_keys=False,
             encoding="utf-8",
         )
-        buffer.seek(0)
-        return buffer
