@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from sub_customizer.datastructures import ClashConfig
+from src.sub_customizer import ClashConfig
 
 
 # 测试ClashConfig模型的基本验证
