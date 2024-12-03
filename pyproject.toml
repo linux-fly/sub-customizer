@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sub-customizer"
+dynamic = ["version"]
+description = "Clash subscription customizer"
+authors = [
+    { name = "linux-fly" }
+]
+license = { text = "GPL-3.0" }
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3 :: Only"
+]
+dependencies = [
+    "requests",
+    "pydantic",
+    "pydantic-settings",
+    "pyyaml"
+]
+
+[project.urls]
+Homepage = "https://github.com/linux-fly/sub-customizer"
+Repository = "https://github.com/linux-fly/sub-customizer"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
+
+[tool.setuptools.dynamic]
+version = {attr = "sub_customizer.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["tests*", "sub_customizer.api*"]
+
+[tool.setuptools.exclude-package-data]
+sub_customizer = ["api*"]
+
+[tool.pytest.ini_options]
+addopts = [
+    "--import-mode=importlib",
+]
+pythonpath = "src"
+
+[tool.ruff]
+line-length = 88
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+extend-select = [
+    "I", # isort
+    "B", # flake8-bugbear
+    "W", # pycodestyle
+    "C4", # flake8-comprehensions
+]
+ignore = [
+    "E501", # line too long, handled by black
+    "B008", # do not perform function calls in argument defaults
+    "C901", # too complex
+    "W191", # indentation contains tabs
+    "B019"  # Use of `functools.lru_cache` or `functools.cache` on methods can lead to memory leaks
+]

@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     debug: bool = False
     root_dir: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent
+    api_dir: pathlib.Path = pathlib.Path(__file__).resolve().parent
     cors_all: bool = False
     default_remote_config: Optional[str] = None
 

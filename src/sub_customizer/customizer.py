@@ -308,7 +308,7 @@ class RemoteConfigParser:
                 rules.append(f"{rule},{rule_set['group']}")
         return rules
 
-    @lru_cache(None)
+    @lru_cache(maxsize=128)
     def _get_proxies_by_regex(self, regex: str):
         proxies = []
         for proxy in self.all_clash_proxies:

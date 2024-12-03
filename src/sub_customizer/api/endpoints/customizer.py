@@ -5,9 +5,9 @@ from fastapi.params import Query
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import HttpUrl
 
-from src.sub_customizer import ClashSubCustomizer
-from src.sub_customizer.api.config import settings
-from src.sub_customizer.api.render import templates
+from sub_customizer import ClashSubCustomizer
+from sub_customizer.api.config import settings
+from sub_customizer.api.render import templates
 
 router = APIRouter()
 
