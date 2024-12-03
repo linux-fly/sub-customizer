@@ -6,8 +6,8 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import HttpUrl
 
 from sub_customizer import ClashSubCustomizer
+from sub_customizer.api.config import settings
 from sub_customizer.api.render import templates
-from sub_customizer.config import api_settings
 
 router = APIRouter()
 
@@ -20,7 +20,7 @@ def clash_sub(
         bool, Query(description="获取订阅链接时是否强制不使用代理")
     ] = False,
 ):
-    remote_config = remote_config or api_settings.default_remote_config
+    remote_config = remote_config or settings.default_remote_config
     sub = ClashSubCustomizer.from_url(str(url), no_proxy=no_proxy)
     written = sub.write_remote_config(str(remote_config))
     return PlainTextResponse(written)
@@ -33,6 +33,6 @@ def sub_customizer(request: Request) -> HTMLResponse:
         name="customizer.html",
         context={
             "base_url": request.url_for("clash_sub"),
-            "remote_config": api_settings.default_remote_config,
+            "remote_config": settings.default_remote_config,
         },
     )
