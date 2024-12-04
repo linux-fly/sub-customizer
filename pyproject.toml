@@ -19,7 +19,7 @@ dependencies = [
     "requests",
     "pydantic",
     "pydantic-settings",
-    "pyyaml"
+    "pyyaml",
 ]
 
 [project.urls]
