@@ -26,19 +26,21 @@ dependencies = [
 Homepage = "https://github.com/linux-fly/sub-customizer"
 Repository = "https://github.com/linux-fly/sub-customizer"
 
+[project.optional-dependencies]
+api = [
+    "fastapi", "jinja2", "uvicorn[standard]"
+]
+
 [tool.setuptools]
 package-dir = { "" = "src" }
 include-package-data = true
 
 [tool.setuptools.dynamic]
-version = {attr = "sub_customizer.__version__"}
+version = { attr = "sub_customizer.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
-exclude = ["tests*", "sub_customizer.api*"]
-
-[tool.setuptools.exclude-package-data]
-sub_customizer = ["api*"]
+exclude = ["tests*"]
 
 [tool.pytest.ini_options]
 addopts = [
