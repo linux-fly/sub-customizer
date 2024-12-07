@@ -5,3 +5,5 @@ RUN pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/we
     pip install -U sub-customizer[api]
 
 WORKDIR /opt/sub-customizer
+
+CMD ["uvicorn", "sub_customizer.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
