@@ -31,6 +31,9 @@ api = [
     "fastapi", "jinja2", "uvicorn[standard]"
 ]
 
+[project.scripts]
+sub-customizer = "sub_customizer.__main__:main"
+
 [tool.setuptools]
 package-dir = { "" = "src" }
 include-package-data = true

@@ -23,3 +23,9 @@ app.include_router(customizer.router, prefix="/customizer", tags=["customizer"])
 @app.get("/")
 def index():
     return {"message": "Hello world."}
+
+
+def serve(host, port):
+    import uvicorn
+
+    uvicorn.run(app, host=host, port=port)
