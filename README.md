@@ -61,6 +61,6 @@ docker run --name sub-customizer -d -p 57890:57890 sub-customizer:latest
 
 ## 为什么不使用subconverter
 
-*subconverter*提供了很多功能，主要包括订阅转换，自定义规则等等。但是对于我或者很多人来说并不需要那些，我所需要的仅仅是能够**对多个机场订阅更新时自动应用使同一套代理规则**（如对oaifree和linuxdo使用直连），并且**简单易配置**。
+*subconverter*提供了很多功能，主要包括订阅转换，自定义规则等等。但是对于我或者很多人来说并不需要那些，我所需要的仅仅是能够**对多个机场订阅更新时自动应用同一套代理规则**（如对oaifree和linuxdo使用直连），并且**简单易配置**。
 
 除了兼容subconverter远程配置中的`ruleset`, `custom_proxy_group`, `enable_rule_generator`和`overwrite_original_rules`之外，其他项直接读取并覆盖原订阅配置文件。
