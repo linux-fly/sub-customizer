@@ -7,10 +7,13 @@
 - 自定义所有Clash配置项：
 
   port, socks-port, redir-port, tproxy-port, mixed-port, allow-lan, bind-address, mode, log-level, ipv6,
-  external-controller, external-ui, secret, interface-name, routing-mark, hosts, profile, dns等
+  unified-delay, tcp-concurrent, find-process-mode, global-client-fingerprint, keep-alive-idle,
+  keep-alive-interval, external-controller, external-ui, secret, interface-name, routing-mark, hosts,
+  profile, geodata-mode, geodata-loader, geosite-matcher, geox-url, dns, sniffer, tun, ntp等
 
 - 支持远程配置，兼容subconverter远程配置中的`ruleset`, `custom_proxy_group`, `enable_rule_generator`和
   `overwrite_original_rules`
+- 远程配置中的结构化覆盖项（如 `hosts`、`profile`、`dns`、`geox-url`、`sniffer`、`tun`、`ntp`）支持 JSON/YAML 字典字符串
 
 ## 使用
 

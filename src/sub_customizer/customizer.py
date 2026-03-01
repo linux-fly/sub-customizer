@@ -211,6 +211,12 @@ class RemoteConfigParser:
         "mode",
         "log-level",
         "ipv6",
+        "unified-delay",
+        "tcp-concurrent",
+        "find-process-mode",
+        "global-client-fingerprint",
+        "keep-alive-idle",
+        "keep-alive-interval",
         "external-controller",
         "external-ui",
         "secret",
@@ -218,8 +224,24 @@ class RemoteConfigParser:
         "routing-mark",
         "hosts",
         "profile",
+        "geodata-mode",
+        "geodata-loader",
+        "geosite-matcher",
+        "geox-url",
         "dns",
+        "sniffer",
+        "tun",
+        "ntp",
     ]
+    structured_override_options = {
+        "hosts",
+        "profile",
+        "dns",
+        "geox-url",
+        "sniffer",
+        "tun",
+        "ntp",
+    }
 
     def __init__(self, ini_str, clash_config: dict = None):
         self.ini_str = ini_str
@@ -355,8 +377,29 @@ class RemoteConfigParser:
         groups = self.parse_custom_proxy_groups()
         return self.extract_proxy_groups(groups)
 
+    def _normalize_override_options(self, override_options: dict) -> dict:
+        normalized = {}
+        for key, value in override_options.items():
+            if key not in self.structured_override_options:
+                normalized[key] = value
+                continue
+            try:
+                parsed = yaml.safe_load(value)
+            except YAMLError as e:
+                logger.warning("解析覆盖项 %s 失败，已跳过: %s", key, e)
+                continue
+            if parsed is None:
+                continue
+            if not isinstance(parsed, dict):
+                logger.warning("覆盖项 %s 必须是字典，已跳过", key)
+                continue
+            normalized[key] = parsed
+        return normalized
+
     def get_override_options(self):
-        override_options = self.options["override_options"]
+        override_options = self._normalize_override_options(
+            self.options["override_options"]
+        )
         try:
             inst = ClashConfig.model_validate(override_options)
             valid_options = inst.model_dump(
