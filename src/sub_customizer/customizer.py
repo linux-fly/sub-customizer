@@ -1,8 +1,12 @@
 import configparser
+import importlib.util
+import inspect
 import logging
+import os
 import re
 from collections import OrderedDict
 from functools import cached_property, lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING, List, Literal, Optional, TypedDict
 from urllib import parse
 
@@ -21,6 +25,10 @@ class CustomizerError(Exception):
 
 
 class LoadSubscriptionError(CustomizerError):
+    pass
+
+
+class OverlayConfigError(CustomizerError):
     pass
 
 
@@ -362,10 +370,28 @@ class RemoteConfigParser:
 
 class ClashSubCustomizer:
     headers = {"User-Agent": "Clash"}
+    default_overlay_file_dir = os.getenv(
+        "SUB_CUSTOMIZER_OVERLAY_FILE_DIR", "overlay_configs"
+    )
+    default_overlay_function_dir = os.getenv(
+        "SUB_CUSTOMIZER_OVERLAY_FUNCTION_DIR", "overlay_providers"
+    )
+    passthrough_header_keys = (
+        "subscription-userinfo",
+        "profile-update-interval",
+        "profile-web-page",
+        "content-disposition",
+        "x-subscription-userinfo",
+    )
 
-    def __init__(self, yaml_str):
+    def __init__(self, yaml_str, source_headers: Optional[dict] = None):
         self.yaml_str = yaml_str
         self.config = yaml.safe_load(yaml_str)
+        self.source_headers = {
+            str(k).lower(): str(v)
+            for k, v in (source_headers or {}).items()
+            if v is not None
+        }
 
     @classmethod
     def from_url(cls, url: str, no_proxy=False):
@@ -375,30 +401,462 @@ class ClashSubCustomizer:
             proxies = {"no_proxy": parsed.hostname}
         res = requests.get(url, headers=cls.headers, proxies=proxies)
         try:
-            return cls(res.text)
+            return cls(res.text, source_headers=dict(res.headers))
         except YAMLError as e:
             logger.exception(e)
             raise LoadSubscriptionError("解析订阅文件错误") from e
 
-    def write_remote_config(self, remote_url) -> bytes:
-        if not remote_url:
-            return self.dump()
-        parser = RemoteConfigParser.from_url(remote_url, clash_config=self.config)
-        proxy_groups = parser.get_proxy_groups()
-        if proxy_groups:
-            self.config["proxy-groups"] = proxy_groups
-        if parser.options["enable_rule_generator"]:
-            rules = parser.get_rules()
-            if rules:
-                if parser.options["overwrite_original_rules"]:
-                    self.config["rules"] = rules
-                else:
-                    # 这里扩展rules而不是覆盖，远程配置中的rules优先级更高
-                    self.config["rules"] = rules + self.config.get("rules", [])
+    def get_passthrough_response_headers(self) -> dict[str, str]:
+        passthrough = {}
+        for key in self.passthrough_header_keys:
+            if key in self.source_headers:
+                passthrough[key] = self.source_headers[key]
+        for key, value in self.source_headers.items():
+            if key.startswith("x-clash-"):
+                passthrough[key] = value
+        return passthrough
+
+    @staticmethod
+    def _load_yaml_text(yaml_text: str) -> dict:
+        try:
+            data = yaml.safe_load(yaml_text) or {}
+        except YAMLError as e:
+            logger.exception(e)
+            raise OverlayConfigError("解析补丁配置错误") from e
+        if not isinstance(data, dict):
+            raise OverlayConfigError("补丁配置必须是字典（mapping）")
+        return data
+
+    @classmethod
+    def _resolve_overlay_file_dir(cls, overlay_file_dir: Optional[str] = None) -> Path:
+        configured_dir = overlay_file_dir or cls.default_overlay_file_dir
+        base_cwd = Path.cwd().resolve()
+        candidate = Path(configured_dir).expanduser()
+        if not candidate.is_absolute():
+            candidate = base_cwd / candidate
+        resolved_dir = candidate.resolve()
+        if not resolved_dir.is_relative_to(base_cwd):
+            raise OverlayConfigError(
+                f"补丁文件目录必须位于当前运行目录下: {resolved_dir}"
+            )
+        if resolved_dir.exists() and not resolved_dir.is_dir():
+            raise OverlayConfigError(f"补丁文件目录不是目录: {resolved_dir}")
+        if not resolved_dir.exists():
+            resolved_dir.mkdir(parents=True, exist_ok=True)
+        return resolved_dir
+
+    @staticmethod
+    def _resolve_overlay_file_path(path: str, overlay_file_dir: Path) -> Path:
+        candidate = Path(path).expanduser()
+        if candidate.is_absolute():
+            file_path = candidate.resolve()
         else:
-            self.config["rules"] = []
-        override_options = parser.get_override_options()
-        self.config.update(override_options)
+            file_path = (overlay_file_dir / candidate).resolve()
+        if not file_path.is_relative_to(overlay_file_dir):
+            raise OverlayConfigError(f"补丁文件越界访问被拒绝: {path}")
+        if not file_path.exists() or not file_path.is_file():
+            raise OverlayConfigError(f"补丁配置文件不存在: {file_path}")
+        return file_path
+
+    @classmethod
+    def _load_overlay_from_file(
+        cls, path: str, overlay_file_dir: Optional[str] = None
+    ) -> dict:
+        resolved_dir = cls._resolve_overlay_file_dir(overlay_file_dir=overlay_file_dir)
+        p = cls._resolve_overlay_file_path(path, overlay_file_dir=resolved_dir)
+        try:
+            content = p.read_text(encoding="utf-8")
+        except OSError as e:
+            raise OverlayConfigError(f"读取补丁配置文件失败: {p}") from e
+        return cls._load_yaml_text(content)
+
+    @classmethod
+    def _load_overlay_from_url(cls, url: str) -> dict:
+        try:
+            res = requests.get(url, headers=cls.headers)
+            res.raise_for_status()
+        except requests.RequestException as e:
+            raise OverlayConfigError(f"拉取补丁配置 URL 失败: {url}") from e
+        return cls._load_yaml_text(res.text)
+
+    @classmethod
+    def _resolve_overlay_function_dir(cls, function_dir: Optional[str] = None) -> Path:
+        configured_dir = function_dir or cls.default_overlay_function_dir
+        base_cwd = Path.cwd().resolve()
+        candidate = Path(configured_dir).expanduser()
+        if not candidate.is_absolute():
+            candidate = base_cwd / candidate
+        resolved_dir = candidate.resolve()
+        if not resolved_dir.is_relative_to(base_cwd):
+            raise OverlayConfigError(f"函数目录必须位于当前运行目录下: {resolved_dir}")
+        if resolved_dir.exists() and not resolved_dir.is_dir():
+            raise OverlayConfigError(f"函数目录不是目录: {resolved_dir}")
+        if not resolved_dir.exists():
+            resolved_dir.mkdir(parents=True, exist_ok=True)
+        return resolved_dir
+
+    @staticmethod
+    def _resolve_module_file(module_spec: str, function_dir: Path) -> Path:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_\.]*", module_spec):
+            raise OverlayConfigError(
+                f"函数模块名不合法: {module_spec}，仅支持字母/数字/下划线/点号"
+            )
+        module_path = Path(*module_spec.split(".")).with_suffix(".py")
+        file_path = (function_dir / module_path).resolve()
+        if not file_path.is_relative_to(function_dir):
+            raise OverlayConfigError(f"函数模块越界访问被拒绝: {module_spec}")
+        if not file_path.exists() or not file_path.is_file():
+            raise OverlayConfigError(f"函数模块文件不存在: {file_path}")
+        return file_path
+
+    @staticmethod
+    def _load_module_from_file(module_file: Path):
+        module_name = f"_sub_customizer_overlay_{abs(hash(str(module_file)))}"
+        spec = importlib.util.spec_from_file_location(module_name, module_file)
+        if spec is None or spec.loader is None:
+            raise OverlayConfigError(f"无法加载函数模块: {module_file}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    @classmethod
+    def _load_overlay_from_function(
+        cls,
+        function_spec: str,
+        clash_config: dict,
+        function_dir: Optional[str] = None,
+    ) -> dict:
+        if ":" not in function_spec:
+            raise OverlayConfigError("函数补丁配置格式错误，应为 func:module:function")
+
+        module_spec, function_name = function_spec.rsplit(":", 1)
+        module_spec = module_spec.strip()
+        function_name = function_name.strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", function_name):
+            raise OverlayConfigError(
+                f"函数名不合法: {function_name}，仅支持字母/数字/下划线"
+            )
+
+        try:
+            resolved_dir = cls._resolve_overlay_function_dir(function_dir=function_dir)
+            module_file = cls._resolve_module_file(
+                module_spec, function_dir=resolved_dir
+            )
+            module = cls._load_module_from_file(module_file)
+        except Exception as e:
+            logger.exception(e)
+            raise OverlayConfigError(f"导入函数模块失败: {module_spec}") from e
+
+        func = getattr(module, function_name, None)
+        if not callable(func):
+            raise OverlayConfigError(f"函数不存在或不可调用: {function_spec}")
+
+        try:
+            signature = inspect.signature(func)
+        except (TypeError, ValueError):
+            signature = None
+
+        try:
+            if signature is None:
+                result = func()
+            else:
+                positional_params = [
+                    p
+                    for p in signature.parameters.values()
+                    if p.kind
+                    in (
+                        inspect.Parameter.POSITIONAL_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    )
+                ]
+                if len(positional_params) == 0:
+                    result = func()
+                elif len(positional_params) == 1:
+                    # 允许函数根据当前配置动态生成补丁
+                    result = func(clash_config)
+                else:
+                    raise OverlayConfigError(
+                        f"补丁函数参数不受支持: {function_spec}，仅支持 0 或 1 个位置参数"
+                    )
+        except OverlayConfigError:
+            raise
+        except Exception as e:
+            logger.exception(e)
+            raise OverlayConfigError(f"执行补丁函数失败: {function_spec}") from e
+
+        if result is None:
+            return {}
+        if isinstance(result, dict):
+            return result
+        if isinstance(result, bytes):
+            return cls._load_yaml_text(result.decode("utf-8"))
+        if isinstance(result, str):
+            return cls._load_yaml_text(result)
+        raise OverlayConfigError(
+            f"补丁函数返回值不支持: {function_spec}，仅支持 dict/str/bytes/None"
+        )
+
+    @classmethod
+    def load_overlay_config(
+        cls,
+        source: str,
+        clash_config: dict,
+        overlay_file_dir: Optional[str] = None,
+        overlay_function_dir: Optional[str] = None,
+    ) -> dict:
+        if not source:
+            return {}
+
+        source = source.strip()
+        if source.startswith("func:"):
+            return cls._load_overlay_from_function(
+                source[len("func:") :],
+                clash_config=clash_config,
+                function_dir=overlay_function_dir,
+            )
+        if is_url(source):
+            return cls._load_overlay_from_url(source)
+        return cls._load_overlay_from_file(source, overlay_file_dir=overlay_file_dir)
+
+    @staticmethod
+    def _validate_overlay_schema(overlay: dict):
+        supported_keys = {
+            "append_proxies",
+            "append_proxy_groups",
+            "inject_group_proxies",
+            "prepend_rules",
+        }
+        unknown_keys = set(overlay) - supported_keys
+        if unknown_keys:
+            raise OverlayConfigError(
+                f"补丁配置包含不支持的字段: {sorted(unknown_keys)}"
+            )
+
+        for key in {"append_proxies", "append_proxy_groups", "inject_group_proxies"}:
+            value = overlay.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, list):
+                raise OverlayConfigError(f"{key} 必须是列表")
+
+        prepend_rules = overlay.get("prepend_rules")
+        if prepend_rules is not None:
+            if not isinstance(prepend_rules, list) or not all(
+                isinstance(rule, str) for rule in prepend_rules
+            ):
+                raise OverlayConfigError("prepend_rules 必须是字符串列表")
+
+    def _overlay_append_proxies(self, proxies_to_append: list[dict]):
+        if not proxies_to_append:
+            return
+        proxies = self.config.setdefault("proxies", [])
+        if not isinstance(proxies, list):
+            raise OverlayConfigError("原始配置中的 proxies 不是列表")
+        existing_names = {
+            item.get("name")
+            for item in proxies
+            if isinstance(item, dict) and item.get("name")
+        }
+        for proxy in proxies_to_append:
+            if not isinstance(proxy, dict):
+                raise OverlayConfigError("append_proxies 中的每一项必须是字典")
+            name = proxy.get("name")
+            if not isinstance(name, str) or not name:
+                raise OverlayConfigError("append_proxies 中的代理必须包含非空 name")
+            if name in existing_names:
+                continue
+            proxies.append(proxy)
+            existing_names.add(name)
+
+    def _overlay_append_proxy_groups(self, groups_to_append: list[dict]):
+        if not groups_to_append:
+            return
+        groups = self.config.setdefault("proxy-groups", [])
+        if not isinstance(groups, list):
+            raise OverlayConfigError("原始配置中的 proxy-groups 不是列表")
+        existing_names = {
+            item.get("name")
+            for item in groups
+            if isinstance(item, dict) and item.get("name")
+        }
+        for group in groups_to_append:
+            if not isinstance(group, dict):
+                raise OverlayConfigError("append_proxy_groups 中的每一项必须是字典")
+            name = group.get("name")
+            if not isinstance(name, str) or not name:
+                raise OverlayConfigError(
+                    "append_proxy_groups 中的分组必须包含非空 name"
+                )
+            if name in existing_names:
+                continue
+            groups.append(group)
+            existing_names.add(name)
+
+    def _overlay_inject_group_proxies(self, inject_specs: list[dict]):
+        if not inject_specs:
+            return
+        groups = self.config.get("proxy-groups") or []
+        if not isinstance(groups, list):
+            raise OverlayConfigError("原始配置中的 proxy-groups 不是列表")
+        group_map = {}
+        for group in groups:
+            if isinstance(group, dict) and group.get("name"):
+                group_map[group["name"]] = group
+
+        def resolve_anchor_index(
+            anchor_value: str, current: list, field_name: str
+        ) -> int:
+            if anchor_value.startswith("re:"):
+                pattern = anchor_value[3:]
+                if not pattern:
+                    raise OverlayConfigError(
+                        f"inject_group_proxies[{group_name}] 的 {field_name} 正则不能为空"
+                    )
+                try:
+                    regex = re.compile(pattern)
+                except re.error as e:
+                    raise OverlayConfigError(
+                        f"inject_group_proxies[{group_name}] 的 {field_name} 正则错误: {pattern}"
+                    ) from e
+                for idx, proxy_name in enumerate(current):
+                    if isinstance(proxy_name, str) and regex.search(proxy_name):
+                        return idx
+                raise OverlayConfigError(
+                    f"inject_group_proxies[{group_name}] 的 {field_name} 正则未匹配到节点: {pattern}"
+                )
+            try:
+                return current.index(anchor_value)
+            except ValueError as e:
+                raise OverlayConfigError(
+                    f"inject_group_proxies[{group_name}] 的 {field_name} 目标不存在: {anchor_value}"
+                ) from e
+
+        for item in inject_specs:
+            if not isinstance(item, dict):
+                raise OverlayConfigError("inject_group_proxies 中的每一项必须是字典")
+            supported_item_keys = {"group", "proxies", "position", "before", "after"}
+            unknown_item_keys = set(item) - supported_item_keys
+            if unknown_item_keys:
+                raise OverlayConfigError(
+                    f"inject_group_proxies 中存在不支持的字段: {sorted(unknown_item_keys)}"
+                )
+            group_name = item.get("group")
+            proxies = item.get("proxies")
+            if not isinstance(group_name, str) or not group_name:
+                raise OverlayConfigError("inject_group_proxies 需要非空 group 字段")
+            if not isinstance(proxies, list) or not all(
+                isinstance(proxy_name, str) for proxy_name in proxies
+            ):
+                raise OverlayConfigError(
+                    f"inject_group_proxies[{group_name}] 的 proxies 必须是字符串列表"
+                )
+            position = item.get("position", "end")
+            before = item.get("before")
+            after = item.get("after")
+            if position not in {"start", "end"}:
+                raise OverlayConfigError(
+                    f"inject_group_proxies[{group_name}] 的 position 仅支持 start/end"
+                )
+            if before is not None and not isinstance(before, str):
+                raise OverlayConfigError(
+                    f"inject_group_proxies[{group_name}] 的 before 必须是字符串"
+                )
+            if after is not None and not isinstance(after, str):
+                raise OverlayConfigError(
+                    f"inject_group_proxies[{group_name}] 的 after 必须是字符串"
+                )
+            if before and after:
+                raise OverlayConfigError(
+                    f"inject_group_proxies[{group_name}] 不能同时设置 before 和 after"
+                )
+            if (before or after) and "position" in item:
+                raise OverlayConfigError(
+                    f"inject_group_proxies[{group_name}] 设置 before/after 时不能同时设置 position"
+                )
+
+            group = group_map.get(group_name)
+            if group is None:
+                raise OverlayConfigError(f"目标分组不存在: {group_name}")
+            current_proxies = group.setdefault("proxies", [])
+            if not isinstance(current_proxies, list):
+                raise OverlayConfigError(f"目标分组 proxies 不是列表: {group_name}")
+
+            incoming = []
+            for proxy_name in proxies:
+                if proxy_name not in current_proxies and proxy_name not in incoming:
+                    incoming.append(proxy_name)
+            if not incoming:
+                continue
+
+            if before:
+                idx = resolve_anchor_index(before, current_proxies, "before")
+                current_proxies[idx:idx] = incoming
+                continue
+
+            if after:
+                idx = resolve_anchor_index(after, current_proxies, "after")
+                current_proxies[idx + 1 : idx + 1] = incoming
+                continue
+
+            if position == "start":
+                current_proxies[0:0] = incoming
+            else:
+                current_proxies.extend(incoming)
+
+    def _overlay_prepend_rules(self, prepend_rules: list[str]):
+        if not prepend_rules:
+            return
+        rules = self.config.setdefault("rules", [])
+        if not isinstance(rules, list):
+            raise OverlayConfigError("原始配置中的 rules 不是列表")
+        new_rules = []
+        for rule in prepend_rules:
+            if rule not in new_rules and rule not in rules:
+                new_rules.append(rule)
+        self.config["rules"] = new_rules + rules
+
+    def apply_overlay_config(self, overlay: dict):
+        if not overlay:
+            return
+        self._validate_overlay_schema(overlay)
+        self._overlay_append_proxies(overlay.get("append_proxies") or [])
+        self._overlay_append_proxy_groups(overlay.get("append_proxy_groups") or [])
+        self._overlay_inject_group_proxies(overlay.get("inject_group_proxies") or [])
+        self._overlay_prepend_rules(overlay.get("prepend_rules") or [])
+
+    def write_remote_config(
+        self,
+        remote_url=None,
+        overlay_config: Optional[str] = None,
+        overlay_file_dir: Optional[str] = None,
+        overlay_function_dir: Optional[str] = None,
+    ) -> bytes:
+        if remote_url:
+            parser = RemoteConfigParser.from_url(remote_url, clash_config=self.config)
+            proxy_groups = parser.get_proxy_groups()
+            if proxy_groups:
+                self.config["proxy-groups"] = proxy_groups
+            if parser.options["enable_rule_generator"]:
+                rules = parser.get_rules()
+                if rules:
+                    if parser.options["overwrite_original_rules"]:
+                        self.config["rules"] = rules
+                    else:
+                        # 这里扩展rules而不是覆盖，远程配置中的rules优先级更高
+                        self.config["rules"] = rules + self.config.get("rules", [])
+            else:
+                self.config["rules"] = []
+            override_options = parser.get_override_options()
+            self.config.update(override_options)
+
+        if overlay_config:
+            overlay = self.load_overlay_config(
+                overlay_config,
+                clash_config=self.config,
+                overlay_file_dir=overlay_file_dir,
+                overlay_function_dir=overlay_function_dir,
+            )
+            self.apply_overlay_config(overlay)
         return self.dump()
 
     def dump(self) -> bytes:

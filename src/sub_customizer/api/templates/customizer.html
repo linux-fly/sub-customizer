@@ -120,6 +120,20 @@
     </div>
 
     <div class="form-group">
+        <label for="overlay_config">补丁配置（文件路径 / URL / func:module:function）</label>
+        <input type="text" id="overlay_config" placeholder="例如: overlay.yaml 或 func:my_module:get_overlay" value="{{ overlay_config or '' }}">
+        <small style="display:block; color:#666; margin-top:6px; line-height:1.5;">
+            文件来源仅从当前运行目录下的补丁文件目录读取。函数来源仅支持 <code>func:module:function</code>，并且只会从当前运行目录下的函数目录加载模块。目录不存在时会自动创建。<br>
+            当前补丁文件目录：<code>{{ overlay_file_dir }}</code>；当前函数目录：<code>{{ overlay_function_dir }}</code>（可通过后端配置修改）。
+        </small>
+    </div>
+
+    <div class="form-group">
+        <label for="token">管理员 Token（仅在需要使用文件/函数 overlay 时填写）</label>
+        <input type="text" id="token" placeholder="可选" value="{{ token or '' }}">
+    </div>
+
+    <div class="form-group">
         <label for="no_proxy">
             <input type="checkbox" id="no_proxy"> 后端请求URL时不使用代理
         </label>
@@ -150,6 +164,8 @@
         const baseUrl = document.getElementById('base_url').value || window.location.origin;
         const url = document.getElementById('url').value;
         const remoteConfig = document.getElementById('remote_config').value;
+        const overlayConfig = document.getElementById('overlay_config').value;
+        const token = document.getElementById('token').value;
         const noProxy = document.getElementById('no_proxy').checked;
 
         // Validation: Only url is required, remote_config is optional
@@ -168,6 +184,16 @@
         // Add remote_config if provided
         if (remoteConfig) {
             params.append('remote_config', remoteConfig);
+        }
+
+        // Add overlay_config if provided
+        if (overlayConfig) {
+            params.append('overlay_config', overlayConfig);
+        }
+
+        // Add token if provided
+        if (token) {
+            params.append('token', token);
         }
 
         // Optional 'no_proxy' parameter
